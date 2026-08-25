@@ -12,8 +12,6 @@ const SETTINGS = Object.freeze({
 
   packsPerDay: 3,
 
-  // Add a new entry whenever the price changes.
-  // "from" is interpreted in Europe/Sofia.
   prices: [
     {
       from: {

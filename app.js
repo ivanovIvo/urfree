@@ -33,11 +33,8 @@
   function zonedParts(epochMs, timeZone = SETTINGS.timezone) {
     const parts = getFormatter(timeZone).formatToParts(new Date(epochMs));
     const out = {};
-
     for (const part of parts) {
-      if (part.type !== "literal") {
-        out[part.type] = Number(part.value);
-      }
+      if (part.type !== "literal") out[part.type] = Number(part.value);
     }
 
     return {
@@ -50,8 +47,6 @@
     };
   }
 
-  // Converts a wall-clock time in a named IANA timezone to an absolute timestamp.
-  // This avoids depending on the timezone configured on the phone.
   function zonedDateTimeToEpoch(parts, timeZone = SETTINGS.timezone) {
     const targetUtcLike = Date.UTC(
       parts.year,
@@ -59,8 +54,7 @@
       parts.day,
       parts.hour || 0,
       parts.minute || 0,
-      parts.second || 0,
-      parts.millisecond || 0
+      parts.second || 0
     );
 
     let guess = targetUtcLike;
@@ -78,36 +72,22 @@
 
       const diff = targetUtcLike - actualUtcLike;
       guess += diff;
-
       if (diff === 0) break;
     }
 
     return guess;
   }
 
-  function compareWallClock(a, b) {
-    const keys = ["year", "month", "day", "hour", "minute", "second"];
-    for (const key of keys) {
-      const av = a[key] || 0;
-      const bv = b[key] || 0;
-      if (av !== bv) return av - bv;
-    }
-    return 0;
-  }
-
   function addCalendarMonths(base, monthsToAdd) {
     const targetMonthIndex = (base.month - 1) + monthsToAdd;
     const year = base.year + Math.floor(targetMonthIndex / 12);
     const month = ((targetMonthIndex % 12) + 12) % 12 + 1;
-
-    // Clamp day for safety, although our start day (24) exists in every month.
     const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate();
-    const day = Math.min(base.day, daysInMonth);
 
     return {
       year,
       month,
-      day,
+      day: Math.min(base.day, daysInMonth),
       hour: base.hour,
       minute: base.minute,
       second: base.second || 0
@@ -136,9 +116,7 @@
       el.className = "day";
 
       const isCritical = i < 5;
-      const size = isCritical
-        ? 46
-        : Math.max(16, 39 - (i - 5) * 1.45);
+      const size = isCritical ? 46 : Math.max(16, 39 - (i - 5) * 1.45);
 
       el.style.setProperty("--size", `${size}px`);
       el.style.setProperty("--fill", isCritical ? "var(--red)" : "var(--orange)");
@@ -158,12 +136,10 @@
 
   function updateCircleView(nowMs, startMs) {
     const elapsedMs = Math.max(0, nowMs - startMs);
-    const children = [...circlesEl.children];
 
-    children.forEach((el, index) => {
+    [...circlesEl.children].forEach((el, index) => {
       const dayStart = index * DAY_MS;
-      const progress = (elapsedMs - dayStart) / DAY_MS;
-      setCircleProgress(el, progress);
+      setCircleProgress(el, (elapsedMs - dayStart) / DAY_MS);
     });
   }
 
@@ -192,18 +168,26 @@
 
       if (segmentEnd <= segmentStart) continue;
 
-      const elapsedDays = (segmentEnd - segmentStart) / DAY_MS;
-      total += elapsedDays * SETTINGS.packsPerDay * current.pricePerPack;
+      total +=
+        ((segmentEnd - segmentStart) / DAY_MS) *
+        SETTINGS.packsPerDay *
+        current.pricePerPack;
     }
 
     return total;
+  }
+
+  function renderMoney(value) {
+    const [whole, fraction] = value.toFixed(2).split(".");
+    moneyEl.innerHTML =
+      `<span class="whole">${whole}</span>` +
+      `<span class="fraction"><span class="separator">,</span>${fraction}</span>`;
   }
 
   function anniversarySpecial(nowMs) {
     const nowLocal = zonedParts(nowMs);
     const start = SETTINGS.start;
 
-    // Before the first complete calendar month there is no monthly anniversary.
     let months = (nowLocal.year - start.year) * 12 + (nowLocal.month - start.month);
     if (months < 1) return null;
 
@@ -217,9 +201,7 @@
       anniversaryMs = zonedDateTimeToEpoch(anniversary);
     }
 
-    const specialEnd = anniversaryMs + DAY_MS;
-
-    if (nowMs >= anniversaryMs && nowMs < specialEnd) {
+    if (nowMs >= anniversaryMs && nowMs < anniversaryMs + DAY_MS) {
       const years = Math.floor(months / 12);
       const remainderMonths = months % 12;
 
@@ -229,31 +211,22 @@
 
       const yearText = `${years} ${years === 1 ? "Year" : "Years"}`;
 
-      if (remainderMonths === 0) {
-        return yearText;
-      }
+      if (remainderMonths === 0) return yearText;
 
-      const monthText =
-        `${remainderMonths} ${remainderMonths === 1 ? "Month" : "Months"}`;
-
-      return `${yearText} ${monthText}`;
+      return `${yearText} ${remainderMonths} ${
+        remainderMonths === 1 ? "Month" : "Months"
+      }`;
     }
 
     return null;
   }
 
   function currentSpecial(nowMs, startMs) {
-    const day5Start = startMs + 5 * DAY_MS;
-    const day6Start = startMs + 6 * DAY_MS;
-
-    if (nowMs >= day5Start && nowMs < day6Start) {
+    if (nowMs >= startMs + 5 * DAY_MS && nowMs < startMs + 6 * DAY_MS) {
       return "50%";
     }
 
-    const day21Start = startMs + 21 * DAY_MS;
-    const day22Start = startMs + 22 * DAY_MS;
-
-    if (nowMs >= day21Start && nowMs < day22Start) {
+    if (nowMs >= startMs + 21 * DAY_MS && nowMs < startMs + 22 * DAY_MS) {
       return "URFree";
     }
 
@@ -271,7 +244,6 @@
     if (anchorMs > nowMs) {
       years -= 1;
       anchor = addCalendarYears(start, years);
-      anchorMs = zonedDateTimeToEpoch(anchor);
     }
 
     let months =
@@ -315,8 +287,7 @@
   function update() {
     const nowMs = Date.now();
 
-    const money = moneySaved(nowMs, startMs);
-    moneyEl.textContent = money.toFixed(2);
+    renderMoney(moneySaved(nowMs, startMs));
 
     if (nowMs < startMs) {
       show("circles");
@@ -344,8 +315,6 @@
 
   renderCircles();
   update();
-
-  // 1 second is more than enough: money is shown to cents and the UI has no seconds counter.
   setInterval(update, 1000);
 
   document.addEventListener("visibilitychange", () => {
