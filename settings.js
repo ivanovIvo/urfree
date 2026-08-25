@@ -3,7 +3,7 @@ const SETTINGS = Object.freeze({
 
   start: {
     year: 2026,
-    month: 8,
+    month: 7,
     day: 24,
     hour: 2,
     minute: 10,
