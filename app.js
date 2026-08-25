@@ -2,12 +2,23 @@
   "use strict";
 
   const DAY_MS = 24 * 60 * 60 * 1000;
+  const HOUR_MS = 60 * 60 * 1000;
   const FIRST_PHASE_DAYS = 21;
 
   const circlesEl = document.getElementById("circles");
   const specialEl = document.getElementById("special");
   const elapsedEl = document.getElementById("elapsed");
   const moneyEl = document.getElementById("money");
+
+  const yearStackEl = document.getElementById("yearStack");
+  const monthIndicatorEl = document.getElementById("monthIndicator");
+  const dayIndicatorEl = document.getElementById("dayIndicator");
+  const hourIndicatorEl = document.getElementById("hourIndicator");
+
+  const yearsValueEl = document.getElementById("yearsValue");
+  const monthsValueEl = document.getElementById("monthsValue");
+  const daysValueEl = document.getElementById("daysValue");
+  const hoursValueEl = document.getElementById("hoursValue");
 
   const dtfCache = new Map();
 
@@ -33,8 +44,11 @@
   function zonedParts(epochMs, timeZone = SETTINGS.timezone) {
     const parts = getFormatter(timeZone).formatToParts(new Date(epochMs));
     const out = {};
+
     for (const part of parts) {
-      if (part.type !== "literal") out[part.type] = Number(part.value);
+      if (part.type !== "literal") {
+        out[part.type] = Number(part.value);
+      }
     }
 
     return {
@@ -72,6 +86,7 @@
 
       const diff = targetUtcLike - actualUtcLike;
       guess += diff;
+
       if (diff === 0) break;
     }
 
@@ -197,6 +212,7 @@
     if (anniversaryMs > nowMs) {
       months -= 1;
       if (months < 1) return null;
+
       anniversary = addCalendarMonths(start, months);
       anniversaryMs = zonedDateTimeToEpoch(anniversary);
     }
@@ -211,7 +227,9 @@
 
       const yearText = `${years} ${years === 1 ? "Year" : "Years"}`;
 
-      if (remainderMonths === 0) return yearText;
+      if (remainderMonths === 0) {
+        return yearText;
+      }
 
       return `${yearText} ${remainderMonths} ${
         remainderMonths === 1 ? "Month" : "Months"
@@ -233,47 +251,101 @@
     return anniversarySpecial(nowMs);
   }
 
-  function diffCalendar(nowMs) {
+  function calendarState(nowMs) {
     const start = SETTINGS.start;
     const nowLocal = zonedParts(nowMs);
 
     let years = nowLocal.year - start.year;
-    let anchor = addCalendarYears(start, years);
-    let anchorMs = zonedDateTimeToEpoch(anchor);
+    let yearAnchor = addCalendarYears(start, years);
+    let yearAnchorMs = zonedDateTimeToEpoch(yearAnchor);
 
-    if (anchorMs > nowMs) {
+    if (yearAnchorMs > nowMs) {
       years -= 1;
-      anchor = addCalendarYears(start, years);
+      yearAnchor = addCalendarYears(start, years);
+      yearAnchorMs = zonedDateTimeToEpoch(yearAnchor);
     }
 
-    let months =
-      (nowLocal.year - anchor.year) * 12 +
-      (nowLocal.month - anchor.month);
+    const nextYearAnchor = addCalendarYears(start, years + 1);
+    const nextYearAnchorMs = zonedDateTimeToEpoch(nextYearAnchor);
 
-    let monthAnchor = addCalendarMonths(anchor, months);
+    let months =
+      (nowLocal.year - yearAnchor.year) * 12 +
+      (nowLocal.month - yearAnchor.month);
+
+    let monthAnchor = addCalendarMonths(yearAnchor, months);
     let monthAnchorMs = zonedDateTimeToEpoch(monthAnchor);
 
     if (monthAnchorMs > nowMs) {
       months -= 1;
-      monthAnchor = addCalendarMonths(anchor, months);
+      monthAnchor = addCalendarMonths(yearAnchor, months);
       monthAnchorMs = zonedDateTimeToEpoch(monthAnchor);
     }
 
-    const remainderMs = Math.max(0, nowMs - monthAnchorMs);
-    const days = Math.floor(remainderMs / DAY_MS);
-    const hours = Math.floor((remainderMs % DAY_MS) / (60 * 60 * 1000));
+    const nextMonthAnchor = addCalendarMonths(monthAnchor, 1);
+    const nextMonthAnchorMs = zonedDateTimeToEpoch(nextMonthAnchor);
 
-    return { years, months, days, hours };
+    const elapsedSinceMonthAnchor = Math.max(0, nowMs - monthAnchorMs);
+    const days = Math.floor(elapsedSinceMonthAnchor / DAY_MS);
+
+    const dayAnchorMs = monthAnchorMs + days * DAY_MS;
+    const hours = Math.floor((nowMs - dayAnchorMs) / HOUR_MS);
+    const hourAnchorMs = dayAnchorMs + hours * HOUR_MS;
+
+    return {
+      years,
+      months,
+      days,
+      hours,
+      yearProgress: (nowMs - yearAnchorMs) / (nextYearAnchorMs - yearAnchorMs),
+      monthProgress: (nowMs - monthAnchorMs) / (nextMonthAnchorMs - monthAnchorMs),
+      dayProgress: (nowMs - dayAnchorMs) / DAY_MS,
+      hourProgress: (nowMs - hourAnchorMs) / HOUR_MS
+    };
+  }
+
+  function setIndicatorProgress(el, fraction) {
+    const clamped = Math.max(0, Math.min(1, fraction));
+    el.style.setProperty("--progress", `${clamped * 360}deg`);
+  }
+
+  function renderYearStack(completedYears, progress) {
+    yearStackEl.innerHTML = "";
+
+    const overlap = 12;
+    const size = 52;
+    const totalCircles = completedYears + 1;
+
+    const neededHeight = size + Math.max(0, totalCircles - 1) * overlap;
+    yearStackEl.style.height = `${Math.max(86, neededHeight)}px`;
+
+    for (let i = 0; i < completedYears; i += 1) {
+      const dot = document.createElement("div");
+      dot.className = "year-dot";
+      dot.style.bottom = `${(completedYears - i) * overlap}px`;
+      dot.style.zIndex = `${i + 1}`;
+      yearStackEl.appendChild(dot);
+    }
+
+    const current = document.createElement("div");
+    current.className = "year-dot current";
+    current.style.setProperty("--progress", `${Math.max(0, Math.min(1, progress)) * 360}deg`);
+    current.style.bottom = "0px";
+    current.style.zIndex = `${completedYears + 2}`;
+    yearStackEl.appendChild(current);
   }
 
   function renderElapsed(nowMs) {
-    const d = diffCalendar(nowMs);
+    const state = calendarState(nowMs);
 
-    elapsedEl.innerHTML =
-      `${d.years}<span class="unit">y.</span>` +
-      `${d.months}<span class="unit">m.</span>` +
-      `${d.days}<span class="unit">d.</span>` +
-      `${d.hours}<span class="unit">h.</span>`;
+    yearsValueEl.textContent = state.years;
+    monthsValueEl.textContent = state.months;
+    daysValueEl.textContent = state.days;
+    hoursValueEl.textContent = state.hours;
+
+    renderYearStack(state.years, state.yearProgress);
+    setIndicatorProgress(monthIndicatorEl, state.monthProgress);
+    setIndicatorProgress(dayIndicatorEl, state.dayProgress);
+    setIndicatorProgress(hourIndicatorEl, state.hourProgress);
   }
 
   function show(mode) {
@@ -315,6 +387,7 @@
 
   renderCircles();
   update();
+
   setInterval(update, 1000);
 
   document.addEventListener("visibilitychange", () => {

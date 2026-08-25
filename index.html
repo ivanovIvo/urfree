@@ -14,8 +14,30 @@
   <main id="app">
     <section id="top" aria-live="polite">
       <div id="circles" aria-hidden="true"></div>
+
       <div id="special" hidden></div>
-      <div id="elapsed" hidden></div>
+
+      <div id="elapsed" hidden>
+        <div class="time-unit year-unit">
+          <div class="indicator-stack" id="yearStack"></div>
+          <div class="time-value"><span id="yearsValue">0</span><span class="unit">y.</span></div>
+        </div>
+
+        <div class="time-unit">
+          <div class="indicator single-indicator" id="monthIndicator"></div>
+          <div class="time-value"><span id="monthsValue">0</span><span class="unit">m.</span></div>
+        </div>
+
+        <div class="time-unit">
+          <div class="indicator single-indicator" id="dayIndicator"></div>
+          <div class="time-value"><span id="daysValue">0</span><span class="unit">d.</span></div>
+        </div>
+
+        <div class="time-unit">
+          <div class="indicator single-indicator" id="hourIndicator"></div>
+          <div class="time-value"><span id="hoursValue">0</span><span class="unit">h.</span></div>
+        </div>
+      </div>
     </section>
 
     <div id="money"><span class="whole">0</span><span class="fraction"><span class="separator">,</span>00</span></div>
