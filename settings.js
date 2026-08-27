@@ -12,6 +12,17 @@ const SETTINGS = Object.freeze({
 
   packsPerDay: 3,
 
+  project: {
+    initialBalance: -998.00,
+
+    adjustments: [
+      // Negative amounts increase the outstanding project balance.
+      // Positive amounts reduce it outside this application's transfers.
+      // Example:
+      // { date: "2026-09-24", amount: -20.00 }
+    ]
+  },
+
   prices: [
     {
       from: {

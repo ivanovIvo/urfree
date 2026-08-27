@@ -8,8 +8,26 @@
   const circlesEl = document.getElementById("circles");
   const specialEl = document.getElementById("special");
   const elapsedEl = document.getElementById("elapsed");
+  const lifetimeMoneyEl = document.getElementById("lifetimeMoney");
   const moneyEl = document.getElementById("money");
+  const projectMoneyEl = document.getElementById("projectMoney");
+  const transferControlsEl = document.getElementById("transferControls");
+  const digitWheelsEl = document.getElementById("digitWheels");
+  const confirmTransferEl = document.getElementById("confirmTransfer");
+  const syncStatusEl = document.getElementById("syncStatus");
   const sceneEl = document.getElementById("scene");
+
+  const authOverlayEl = document.getElementById("authOverlay");
+  const loginFormEl = document.getElementById("loginForm");
+  const loginEmailEl = document.getElementById("loginEmail");
+  const loginPasswordEl = document.getElementById("loginPassword");
+  const loginErrorEl = document.getElementById("loginError");
+  const maintenanceOverlayEl = document.getElementById("maintenanceOverlay");
+  const historyListEl = document.getElementById("historyList");
+  const undoTransferEl = document.getElementById("undoTransfer");
+  const logoutButtonEl = document.getElementById("logoutButton");
+  const closeMaintenanceEl = document.getElementById("closeMaintenance");
+  const maintenanceErrorEl = document.getElementById("maintenanceError");
 
   const yearStackEl = document.getElementById("yearStack");
   const monthIndicatorEl = document.getElementById("monthIndicator");
@@ -211,11 +229,39 @@
     return total;
   }
 
-  function renderMoney(value) {
-    const [whole, fraction] = value.toFixed(2).split(".");
-    moneyEl.innerHTML =
-      `<span class="whole">${whole}</span>` +
+  function toCents(value) {
+    return Math.round(Number(value) * 100);
+  }
+
+  function moneySavedCents(nowMs, startMs) {
+    return toCents(moneySaved(nowMs, startMs));
+  }
+
+  function renderMoneyElement(element, cents) {
+    if (!Number.isSafeInteger(cents)) {
+      element.innerHTML = '<span class="whole">&mdash;</span>';
+      return;
+    }
+
+    const sign = cents < 0 ? "−" : "";
+    const absolute = Math.abs(cents);
+    const whole = Math.floor(absolute / 100).toString();
+    const fraction = (absolute % 100).toString().padStart(2, "0");
+    element.innerHTML =
+      `<span class="whole">${sign}${whole}</span>` +
       `<span class="fraction"><span class="separator">,</span>${fraction}</span>`;
+  }
+
+  function renderMoney(cents) {
+    renderMoneyElement(moneyEl, cents);
+  }
+
+  function formatCents(cents) {
+    const sign = cents < 0 ? "−" : "";
+    const absolute = Math.abs(cents);
+    return `${sign}${Math.floor(absolute / 100)},${(absolute % 100)
+      .toString()
+      .padStart(2, "0")}`;
   }
 
   function anniversarySpecial(nowMs) {
@@ -679,12 +725,374 @@
     elapsedEl.hidden = mode !== "elapsed";
   }
 
+  let financeReady = false;
+  let financeBusy = false;
+  let allocatedCents = 0;
+  let transfers = [];
+  let pickerWholeDigits = 0;
+  let latestLifetimeCents = 0;
+  let transferPickerOpen = false;
+  let moneyHoldTimer = null;
+  let moneyHoldStart = null;
+
+  function setTransferPickerOpen(open) {
+    transferPickerOpen = Boolean(open && financeReady);
+    transferControlsEl.hidden = !transferPickerOpen;
+    moneyEl.setAttribute("aria-expanded", String(transferPickerOpen));
+
+    if (!transferPickerOpen) resetPicker();
+  }
+
+  function cancelMoneyHold() {
+    if (moneyHoldTimer !== null) {
+      clearTimeout(moneyHoldTimer);
+      moneyHoldTimer = null;
+    }
+    moneyHoldStart = null;
+  }
+
+  function beginMoneyHold(event) {
+    if (!financeReady || financeBusy || event.button !== 0) return;
+    cancelMoneyHold();
+    moneyHoldStart = { x: event.clientX, y: event.clientY };
+    moneyHoldTimer = window.setTimeout(() => {
+      moneyHoldTimer = null;
+      moneyHoldStart = null;
+      setTransferPickerOpen(true);
+    }, 550);
+  }
+
+  function projectAdjustmentCents(nowMs) {
+    const project = SETTINGS.project || {};
+    const adjustments = Array.isArray(project.adjustments) ? project.adjustments : [];
+
+    return adjustments.reduce((sum, adjustment) => {
+      if (!adjustment || typeof adjustment.date !== "string") return sum;
+      const match = adjustment.date.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+      if (!match) return sum;
+
+      const effectiveMs = zonedDateTimeToEpoch({
+        year: Number(match[1]),
+        month: Number(match[2]),
+        day: Number(match[3]),
+        hour: 0,
+        minute: 0,
+        second: 0
+      });
+
+      return effectiveMs <= nowMs ? sum + toCents(adjustment.amount) : sum;
+    }, 0);
+  }
+
+  function projectBalanceCents(nowMs) {
+    return toCents(SETTINGS.project?.initialBalance || 0) +
+      projectAdjustmentCents(nowMs) +
+      allocatedCents;
+  }
+
+  function selectedAmountCents() {
+    const digits = [...digitWheelsEl.querySelectorAll("select")]
+      .map((select) => select.value)
+      .join("");
+    return Number(digits || 0);
+  }
+
+  function resetPicker() {
+    digitWheelsEl.querySelectorAll("select").forEach((select) => {
+      select.value = "0";
+    });
+    updateConfirmState();
+  }
+
+  function updateConfirmState() {
+    const available = Math.max(0, latestLifetimeCents - allocatedCents);
+    const amount = selectedAmountCents();
+    confirmTransferEl.disabled =
+      !financeReady || financeBusy || amount <= 0 || amount > available;
+  }
+
+  function buildPicker(availableCents) {
+    const wholeDigits = Math.max(3, Math.floor(availableCents / 100).toString().length);
+    if (wholeDigits === pickerWholeDigits) {
+      updateConfirmState();
+      return;
+    }
+
+    pickerWholeDigits = wholeDigits;
+    digitWheelsEl.innerHTML = "";
+    const totalDigits = wholeDigits + 2;
+
+    for (let index = 0; index < totalDigits; index += 1) {
+      if (index === wholeDigits) {
+        const separator = document.createElement("span");
+        separator.className = "wheel-separator";
+        separator.textContent = ",";
+        digitWheelsEl.appendChild(separator);
+      }
+
+      const select = document.createElement("select");
+      select.className = "digit-wheel";
+      select.setAttribute(
+        "aria-label",
+        index < wholeDigits
+          ? `Whole digit ${index + 1}`
+          : `Decimal digit ${index - wholeDigits + 1}`
+      );
+
+      for (let digit = 0; digit <= 9; digit += 1) {
+        const option = document.createElement("option");
+        option.value = String(digit);
+        option.textContent = String(digit);
+        select.appendChild(option);
+      }
+
+      select.addEventListener("change", updateConfirmState);
+      digitWheelsEl.appendChild(select);
+    }
+
+    updateConfirmState();
+  }
+
+  function renderHistory() {
+    historyListEl.innerHTML = "";
+
+    if (transfers.length === 0) {
+      historyListEl.textContent = "No transfers yet";
+    } else {
+      [...transfers].reverse().forEach((transfer) => {
+        const row = document.createElement("div");
+        row.className = "history-row";
+
+        const amount = document.createElement("span");
+        amount.textContent = `+${formatCents(transfer.amountCents)}`;
+        const date = document.createElement("time");
+        const instant = new Date(transfer.createdAt);
+        date.dateTime = transfer.createdAt;
+        date.textContent = Number.isNaN(instant.getTime())
+          ? ""
+          : instant.toLocaleDateString("en-GB", {
+              timeZone: SETTINGS.timezone,
+              day: "2-digit",
+              month: "2-digit",
+              year: "numeric"
+            });
+
+        row.append(amount, date);
+        historyListEl.appendChild(row);
+      });
+    }
+
+    undoTransferEl.disabled = financeBusy || transfers.length === 0;
+  }
+
+  function applyFinanceState(state) {
+    transfers = Array.isArray(state.transfers) ? state.transfers : [];
+    allocatedCents = Number.isSafeInteger(state.allocatedCents)
+      ? state.allocatedCents
+      : transfers.reduce((sum, item) => sum + Number(item.amountCents || 0), 0);
+    financeReady = true;
+    authOverlayEl.hidden = true;
+    syncStatusEl.textContent = "";
+    renderHistory();
+    update();
+  }
+
+  async function api(path, options = {}) {
+    const response = await fetch(path, {
+      ...options,
+      credentials: "same-origin",
+      headers: {
+        "Content-Type": "application/json",
+        ...(options.headers || {})
+      }
+    });
+    const data = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      const error = new Error(data.error || "Request failed");
+      error.status = response.status;
+      throw error;
+    }
+
+    return data;
+  }
+
+  async function loadFinanceState() {
+    syncStatusEl.textContent = "syncing";
+    try {
+      applyFinanceState(await api("/api/finance"));
+    } catch (error) {
+      financeReady = false;
+      setTransferPickerOpen(false);
+      renderMoney(Number.NaN);
+      renderMoneyElement(projectMoneyEl, Number.NaN);
+      syncStatusEl.textContent = "";
+      authOverlayEl.hidden = false;
+      if (error.status !== 401) {
+        loginErrorEl.textContent = "Netlify connection is not ready";
+      }
+    }
+  }
+
+  async function saveFinanceAction(body) {
+    financeBusy = true;
+    syncStatusEl.textContent = "saving";
+    updateConfirmState();
+    renderHistory();
+
+    try {
+      const state = await api("/api/finance", {
+        method: "POST",
+        body: JSON.stringify(body)
+      });
+      applyFinanceState(state);
+      resetPicker();
+      return true;
+    } catch (error) {
+      syncStatusEl.textContent = "not saved";
+      maintenanceErrorEl.textContent = error.message;
+      if (error.status === 401) authOverlayEl.hidden = false;
+      return false;
+    } finally {
+      financeBusy = false;
+      updateConfirmState();
+      renderHistory();
+    }
+  }
+
+  confirmTransferEl.addEventListener("click", async () => {
+    const amountCents = selectedAmountCents();
+    const availableCents = latestLifetimeCents - allocatedCents;
+    if (amountCents <= 0 || amountCents > availableCents || financeBusy) return;
+
+    const id = typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `transfer-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+
+    const saved = await saveFinanceAction({
+      action: "transfer",
+      id,
+      amountCents,
+      lifetimeCents: latestLifetimeCents
+    });
+    if (saved) setTransferPickerOpen(false);
+  });
+
+  moneyEl.addEventListener("pointerdown", beginMoneyHold);
+  moneyEl.addEventListener("pointerup", cancelMoneyHold);
+  moneyEl.addEventListener("pointercancel", cancelMoneyHold);
+  moneyEl.addEventListener("pointerleave", cancelMoneyHold);
+  moneyEl.addEventListener("pointermove", (event) => {
+    if (!moneyHoldStart) return;
+    const distance = Math.hypot(
+      event.clientX - moneyHoldStart.x,
+      event.clientY - moneyHoldStart.y
+    );
+    if (distance > 12) cancelMoneyHold();
+  });
+  moneyEl.addEventListener("contextmenu", (event) => event.preventDefault());
+  moneyEl.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      setTransferPickerOpen(!transferPickerOpen);
+    }
+  });
+
+  document.addEventListener("pointerdown", (event) => {
+    if (
+      transferPickerOpen &&
+      !moneyEl.contains(event.target) &&
+      !transferControlsEl.contains(event.target)
+    ) {
+      setTransferPickerOpen(false);
+    }
+  });
+
+  loginFormEl.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    loginErrorEl.textContent = "";
+    const submit = loginFormEl.querySelector('button[type="submit"]');
+    submit.disabled = true;
+
+    try {
+      await api("/api/auth", {
+        method: "POST",
+        body: JSON.stringify({
+          action: "login",
+          email: loginEmailEl.value,
+          password: loginPasswordEl.value
+        })
+      });
+      loginPasswordEl.value = "";
+      await loadFinanceState();
+    } catch (error) {
+      loginErrorEl.textContent = error.message;
+    } finally {
+      submit.disabled = false;
+    }
+  });
+
+  projectMoneyEl.addEventListener("click", () => {
+    if (!financeReady) {
+      authOverlayEl.hidden = false;
+      return;
+    }
+    maintenanceErrorEl.textContent = "";
+    renderHistory();
+    maintenanceOverlayEl.hidden = false;
+  });
+
+  closeMaintenanceEl.addEventListener("click", () => {
+    maintenanceOverlayEl.hidden = true;
+  });
+
+  maintenanceOverlayEl.addEventListener("click", (event) => {
+    if (event.target === maintenanceOverlayEl) maintenanceOverlayEl.hidden = true;
+  });
+
+  undoTransferEl.addEventListener("click", async () => {
+    if (transfers.length === 0 || financeBusy) return;
+    if (await saveFinanceAction({ action: "undo" })) {
+      maintenanceOverlayEl.hidden = true;
+    }
+  });
+
+  logoutButtonEl.addEventListener("click", async () => {
+    if (financeBusy) return;
+    try {
+      await api("/api/auth", {
+        method: "POST",
+        body: JSON.stringify({ action: "logout" })
+      });
+    } finally {
+      financeReady = false;
+      allocatedCents = 0;
+      transfers = [];
+      maintenanceOverlayEl.hidden = true;
+      setTransferPickerOpen(false);
+      authOverlayEl.hidden = false;
+      update();
+    }
+  });
+
   const startMs = zonedDateTimeToEpoch(SETTINGS.start);
 
   function update() {
     const nowMs = Date.now();
 
-    renderMoney(moneySaved(nowMs, startMs));
+    latestLifetimeCents = moneySavedCents(nowMs, startMs);
+    renderMoneyElement(lifetimeMoneyEl, latestLifetimeCents);
+
+    if (financeReady) {
+      const availableCents = Math.max(0, latestLifetimeCents - allocatedCents);
+      renderMoney(availableCents);
+      renderMoneyElement(projectMoneyEl, projectBalanceCents(nowMs));
+      buildPicker(availableCents);
+    } else {
+      renderMoney(Number.NaN);
+      renderMoneyElement(projectMoneyEl, Number.NaN);
+    }
+
     renderScene(nowMs, startMs);
 
     if (nowMs < startMs) {
@@ -709,6 +1117,7 @@
 
   renderCircles();
   update();
+  loadFinanceState();
 
   setInterval(update, 1000);
 

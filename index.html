@@ -13,41 +13,87 @@
 <body>
   <main id="app">
     <section id="top" aria-live="polite">
-      <div id="circles" aria-hidden="true"></div>
+      <div id="lifetimeMoney" class="compact-money" aria-label="Lifetime savings">
+        <span class="whole">0</span><span class="fraction"><span class="separator">,</span>00</span>
+      </div>
 
-      <div id="special" hidden></div>
+      <div id="topDisplay">
+        <div id="circles" aria-hidden="true"></div>
 
-      <div id="elapsed" hidden>
-        <div class="time-unit year-unit">
-          <div class="indicator-stack" id="yearStack"></div>
-          <div class="time-value"><span id="yearsValue">0</span><span class="unit">y.</span></div>
-        </div>
+        <div id="special" hidden></div>
 
-        <div class="time-unit">
-          <div class="indicator single-indicator" id="monthIndicator"></div>
-          <div class="time-value"><span id="monthsValue">0</span><span class="unit">m.</span></div>
-        </div>
+        <div id="elapsed" hidden>
+          <div class="time-unit year-unit">
+            <div class="indicator-stack" id="yearStack"></div>
+            <div class="time-value"><span id="yearsValue">0</span><span class="unit">y.</span></div>
+          </div>
 
-        <div class="time-unit">
-          <div class="indicator single-indicator" id="dayIndicator"></div>
-          <div class="time-value"><span id="daysValue">0</span><span class="unit">d.</span></div>
-        </div>
+          <div class="time-unit">
+            <div class="indicator single-indicator" id="monthIndicator"></div>
+            <div class="time-value"><span id="monthsValue">0</span><span class="unit">m.</span></div>
+          </div>
 
-        <div class="time-unit">
-          <div class="indicator single-indicator" id="hourIndicator"></div>
-          <div class="time-value"><span id="hoursValue">0</span><span class="unit">h.</span></div>
+          <div class="time-unit">
+            <div class="indicator single-indicator" id="dayIndicator"></div>
+            <div class="time-value"><span id="daysValue">0</span><span class="unit">d.</span></div>
+          </div>
+
+          <div class="time-unit">
+            <div class="indicator single-indicator" id="hourIndicator"></div>
+            <div class="time-value"><span id="hoursValue">0</span><span class="unit">h.</span></div>
+          </div>
         </div>
       </div>
     </section>
 
-    <div id="money">
-      <span class="whole">0</span><span class="fraction"><span class="separator">,</span>00</span>
-    </div>
+    <section id="finance" aria-live="polite">
+      <div
+        id="money"
+        role="button"
+        tabindex="0"
+        aria-label="Available savings. Hold to transfer."
+        aria-controls="transferControls"
+        aria-expanded="false"
+      >
+        <span class="whole">—</span>
+      </div>
+
+      <div id="transferControls" hidden>
+        <div id="digitWheels" aria-label="Transfer amount"></div>
+        <button id="confirmTransfer" type="button" aria-label="Confirm transfer" disabled>✓</button>
+      </div>
+
+      <button id="projectMoney" class="compact-money project-money" type="button" aria-label="Project balance">
+        <span class="whole">—</span>
+      </button>
+      <div id="syncStatus" role="status"></div>
+    </section>
 
     <section id="sceneWrap" aria-hidden="true">
       <div id="scene"></div>
     </section>
   </main>
+
+  <div id="authOverlay" class="overlay" hidden>
+    <form id="loginForm" class="panel">
+      <div class="panel-title">URFree</div>
+      <input id="loginEmail" name="email" type="email" inputmode="email" autocomplete="username" placeholder="email" required />
+      <input id="loginPassword" name="password" type="password" autocomplete="current-password" placeholder="password" required />
+      <button type="submit">Sign in</button>
+      <div id="loginError" class="panel-message" role="alert"></div>
+    </form>
+  </div>
+
+  <div id="maintenanceOverlay" class="overlay" hidden>
+    <section class="panel maintenance-panel" role="dialog" aria-modal="true" aria-label="Project history">
+      <div class="panel-title">Project</div>
+      <div id="historyList" class="history-list"></div>
+      <button id="undoTransfer" type="button">Undo last transfer</button>
+      <button id="logoutButton" class="quiet-button" type="button">Sign out</button>
+      <button id="closeMaintenance" class="quiet-button" type="button">Close</button>
+      <div id="maintenanceError" class="panel-message" role="alert"></div>
+    </section>
+  </div>
 
   <script src="settings.js"></script>
   <script src="app.js"></script>

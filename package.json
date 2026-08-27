@@ -1,0 +1,17 @@
+{
+  "name": "urfree",
+  "version": "5.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "node scripts/dev-server.mjs",
+    "dev:reset": "node scripts/reset-dev-data.mjs"
+  },
+  "dependencies": {
+    "@netlify/blobs": "11.0.1",
+    "@netlify/identity": "2.0.0"
+  }
+}
