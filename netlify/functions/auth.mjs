@@ -2,6 +2,7 @@ import {
   getUser,
   login,
   logout,
+  refreshSession,
   verifyRequestOrigin
 } from "@netlify/identity";
 
@@ -14,6 +15,7 @@ const json = (value, status = 200) =>
 export default async (request) => {
   try {
     if (request.method === "GET") {
+      await refreshSession();
       const user = await getUser();
       return user
         ? json({ user: { id: user.id, email: user.email } })

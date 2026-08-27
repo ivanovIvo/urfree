@@ -1078,9 +1078,12 @@
       renderMoney(Number.NaN);
       renderMoneyElement(projectMoneyEl, Number.NaN);
       syncStatusEl.textContent = "";
-      authOverlayEl.hidden = false;
-      if (error.status !== 401) {
+      if (error.status === 401) {
+        loginErrorEl.textContent = "";
+        showAuthView("login");
+      } else {
         loginErrorEl.textContent = "Netlify connection is not ready";
+        showAuthView("login");
       }
     }
   }
@@ -1159,6 +1162,75 @@
     }
   });
 
+  passwordSetupFormEl.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    passwordSetupErrorEl.textContent = "";
+
+    const password = newPasswordEl.value;
+    const confirmation = confirmPasswordEl.value;
+
+    if (password.length < 8) {
+      passwordSetupErrorEl.textContent = "Password must be at least 8 characters";
+      return;
+    }
+
+    if (password !== confirmation) {
+      passwordSetupErrorEl.textContent = "Passwords do not match";
+      return;
+    }
+
+    const flow = pendingAuthFlow || readPendingAuth();
+    if (!flow) {
+      passwordSetupErrorEl.textContent = "The authentication link has expired. Request a new invitation.";
+      return;
+    }
+
+    const submit = passwordSetupSubmitEl;
+    submit.disabled = true;
+
+    try {
+      if (flow.type === "invite") {
+        if (!identityClient?.acceptInvite || !flow.token) {
+          throw new Error("Invitation support did not load");
+        }
+        await identityClient.acceptInvite(flow.token, password);
+      } else if (flow.type === "recovery") {
+        if (!identityClient?.updateUser) {
+          throw new Error("Password recovery support did not load");
+        }
+        await identityClient.updateUser({ password });
+      } else {
+        throw new Error("Unknown authentication flow");
+      }
+
+      clearPendingAuth();
+      clearAuthHash();
+      newPasswordEl.value = "";
+      confirmPasswordEl.value = "";
+
+      await hydrateBrowserSession();
+      await loadFinanceState();
+
+      if (!financeReady) {
+        showAuthView("login");
+      } else {
+        showAuthView(null);
+      }
+    } catch (error) {
+      passwordSetupErrorEl.textContent =
+        error instanceof Error ? error.message : "Unable to activate account";
+    } finally {
+      submit.disabled = false;
+    }
+  });
+
+  authCallbackLoginEl.addEventListener("click", () => {
+    clearPendingAuth();
+    clearAuthHash();
+    loginErrorEl.textContent = "";
+    showAuthView("login");
+  });
+
   loginFormEl.addEventListener("submit", async (event) => {
     event.preventDefault();
     loginErrorEl.textContent = "";
@@ -1175,7 +1247,9 @@
         })
       });
       loginPasswordEl.value = "";
+      await hydrateBrowserSession();
       await loadFinanceState();
+      if (financeReady) showAuthView(null);
     } catch (error) {
       loginErrorEl.textContent = error.message;
     } finally {
@@ -1221,7 +1295,7 @@
       transfers = [];
       maintenanceOverlayEl.hidden = true;
       setTransferPickerOpen(false);
-      authOverlayEl.hidden = false;
+      showAuthView("login");
       update();
     }
   });
@@ -1268,7 +1342,7 @@
 
   renderCircles();
   update();
-  loadFinanceState();
+  bootstrapAuthentication();
 
   setInterval(update, 1000);
 

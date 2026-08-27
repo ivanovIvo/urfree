@@ -1,5 +1,5 @@
 import { getStore } from "@netlify/blobs";
-import { getUser, verifyRequestOrigin } from "@netlify/identity";
+import { getUser, refreshSession, verifyRequestOrigin } from "@netlify/identity";
 
 const STORE_NAME = "urfree-finance";
 const EMPTY_STATE = Object.freeze({ version: 1, transfers: [] });
@@ -36,6 +36,10 @@ async function updateState(store, key, mutate) {
 
 export default async (request) => {
   try {
+    // Keep a returning browser/Home Screen session alive using Netlify's
+    // long-lived refresh cookie. The user only needs to enter the password
+    // again if the refresh session has expired, been revoked, or they sign out.
+    await refreshSession();
     const user = await getUser();
     if (!user) return json({ error: "Unauthorized" }, 401);
 
