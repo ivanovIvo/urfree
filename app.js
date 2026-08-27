@@ -18,6 +18,16 @@
   const sceneEl = document.getElementById("scene");
 
   const authOverlayEl = document.getElementById("authOverlay");
+  const authCallbackPanelEl = document.getElementById("authCallbackPanel");
+  const authCallbackMessageEl = document.getElementById("authCallbackMessage");
+  const authCallbackLoginEl = document.getElementById("authCallbackLogin");
+  const passwordSetupFormEl = document.getElementById("passwordSetupForm");
+  const passwordSetupTitleEl = document.getElementById("passwordSetupTitle");
+  const passwordSetupCopyEl = document.getElementById("passwordSetupCopy");
+  const passwordSetupSubmitEl = document.getElementById("passwordSetupSubmit");
+  const passwordSetupErrorEl = document.getElementById("passwordSetupError");
+  const newPasswordEl = document.getElementById("newPassword");
+  const confirmPasswordEl = document.getElementById("confirmPassword");
   const loginFormEl = document.getElementById("loginForm");
   const loginEmailEl = document.getElementById("loginEmail");
   const loginPasswordEl = document.getElementById("loginPassword");
@@ -734,6 +744,147 @@
   let transferPickerOpen = false;
   let moneyHoldTimer = null;
   let moneyHoldStart = null;
+  let pendingAuthFlow = null;
+
+  const identityClient = window.URFreeIdentity || null;
+  const PENDING_AUTH_KEY = "urfree.pending-auth-flow";
+  const AUTH_CALLBACK_KEYS = [
+    "access_token",
+    "confirmation_token",
+    "recovery_token",
+    "invite_token",
+    "email_change_token"
+  ];
+
+  function hasAuthCallbackHash() {
+    if (!window.location.hash) return false;
+    const params = new URLSearchParams(window.location.hash.slice(1));
+    return AUTH_CALLBACK_KEYS.some((key) => params.has(key));
+  }
+
+  function showAuthView(view) {
+    const visible = view !== null;
+    authOverlayEl.hidden = !visible;
+    authCallbackPanelEl.hidden = view !== "callback";
+    passwordSetupFormEl.hidden = view !== "password";
+    loginFormEl.hidden = view !== "login";
+  }
+
+  function savePendingAuth(flow) {
+    pendingAuthFlow = flow;
+    try {
+      sessionStorage.setItem(PENDING_AUTH_KEY, JSON.stringify(flow));
+    } catch {
+      // The in-memory copy still supports the current Safari/PWA session.
+    }
+  }
+
+  function readPendingAuth() {
+    try {
+      const value = JSON.parse(sessionStorage.getItem(PENDING_AUTH_KEY) || "null");
+      if (value?.type === "recovery") return { type: "recovery" };
+      if (value?.type === "invite" && typeof value.token === "string") {
+        return { type: "invite", token: value.token };
+      }
+    } catch {
+      // Ignore unavailable or malformed session state.
+    }
+    return null;
+  }
+
+  function clearPendingAuth() {
+    pendingAuthFlow = null;
+    try {
+      sessionStorage.removeItem(PENDING_AUTH_KEY);
+    } catch {
+      // No persistent ledger data is stored in the browser.
+    }
+  }
+
+  function clearAuthHash() {
+    if (!hasAuthCallbackHash()) return;
+    history.replaceState(history.state, "", `${location.pathname}${location.search}`);
+  }
+
+  function showCallbackStatus(message, allowLogin = false) {
+    authCallbackMessageEl.textContent = message;
+    authCallbackLoginEl.hidden = !allowLogin;
+    showAuthView("callback");
+  }
+
+  function showPasswordSetup(flow) {
+    pendingAuthFlow = flow;
+    const invite = flow.type === "invite";
+    passwordSetupTitleEl.textContent = invite ? "Set password" : "Reset password";
+    passwordSetupCopyEl.textContent = invite
+      ? "Choose a password to activate your account."
+      : "Choose a new password for your account.";
+    passwordSetupSubmitEl.textContent = invite ? "Activate account" : "Save password";
+    passwordSetupErrorEl.textContent = "";
+    newPasswordEl.value = "";
+    confirmPasswordEl.value = "";
+    showAuthView("password");
+    window.setTimeout(() => newPasswordEl.focus(), 0);
+  }
+
+  async function hydrateBrowserSession() {
+    if (!identityClient?.hydrateSession) return null;
+    try {
+      return await identityClient.hydrateSession();
+    } catch {
+      return null;
+    }
+  }
+
+  async function bootstrapAuthentication() {
+    const callbackInUrl = hasAuthCallbackHash();
+    if (callbackInUrl) showCallbackStatus("Completing authentication…");
+
+    if (!identityClient?.handleAuthCallback) {
+      if (callbackInUrl) {
+        showCallbackStatus("Authentication support did not load. Please reload the page.", true);
+        return;
+      }
+      await loadFinanceState();
+      return;
+    }
+
+    try {
+      const callback = await identityClient.handleAuthCallback();
+
+      if (callback?.type === "invite" && callback.token) {
+        const flow = { type: "invite", token: callback.token };
+        savePendingAuth(flow);
+        showPasswordSetup(flow);
+        return;
+      }
+
+      if (callback?.type === "recovery") {
+        const flow = { type: "recovery" };
+        savePendingAuth(flow);
+        showPasswordSetup(flow);
+        return;
+      }
+
+      if (callback) clearPendingAuth();
+
+      const savedFlow = readPendingAuth();
+      if (savedFlow) {
+        showPasswordSetup(savedFlow);
+        return;
+      }
+
+      await hydrateBrowserSession();
+      await loadFinanceState();
+    } catch (error) {
+      showCallbackStatus(
+        error instanceof Error
+          ? error.message
+          : "The authentication link is invalid or has expired.",
+        true
+      );
+    }
+  }
 
   function setTransferPickerOpen(open) {
     transferPickerOpen = Boolean(open && financeReady);

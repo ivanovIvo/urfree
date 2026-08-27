@@ -415,6 +415,13 @@ body {
   text-align: center;
 }
 
+.panel-copy {
+  color: rgba(245, 245, 245, 0.62);
+  font-size: 14px;
+  line-height: 1.45;
+  text-align: center;
+}
+
 .panel input,
 .panel button {
   min-height: 48px;

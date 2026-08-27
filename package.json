@@ -7,11 +7,16 @@
     "node": ">=20"
   },
   "scripts": {
+    "build": "esbuild src/identity-client.js --bundle --format=iife --global-name=URFreeIdentity --outfile=auth-client.bundle.js",
+    "predev": "npm run build",
     "dev": "node scripts/dev-server.mjs",
     "dev:reset": "node scripts/reset-dev-data.mjs"
   },
   "dependencies": {
     "@netlify/blobs": "11.0.1",
     "@netlify/identity": "2.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2"
   }
 }

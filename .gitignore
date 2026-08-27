@@ -1,3 +1,4 @@
 node_modules/
 .netlify/
 .urfree-dev-data.json
+auth-client.bundle.js

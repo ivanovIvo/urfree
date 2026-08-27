@@ -14,6 +14,7 @@ const PUBLIC_FILES = new Map([
   ["/app.js", "app.js"],
   ["/settings.js", "settings.js"],
   ["/style.css", "style.css"]
+  ,["/auth-client.bundle.js", "auth-client.bundle.js"]
 ]);
 const CONTENT_TYPES = {
   ".html": "text/html; charset=utf-8",
