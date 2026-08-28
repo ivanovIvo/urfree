@@ -13,8 +13,9 @@ const PUBLIC_FILES = new Map([
   ["/index.html", "index.html"],
   ["/app.js", "app.js"],
   ["/settings.js", "settings.js"],
-  ["/style.css", "style.css"]
-  ,["/auth-client.bundle.js", "auth-client.bundle.js"]
+  ["/style.css", "style.css"],
+  ["/sw.js", "sw.js"],
+  ["/auth-client.bundle.js", "auth-client.bundle.js"]
 ]);
 const CONTENT_TYPES = {
   ".html": "text/html; charset=utf-8",
@@ -27,11 +28,14 @@ async function readState() {
     const state = JSON.parse(await readFile(DATA_FILE, "utf8"));
     return {
       version: 1,
-      transfers: Array.isArray(state.transfers) ? state.transfers : []
+      transfers: Array.isArray(state.transfers) ? state.transfers : [],
+      processedUndoIds: Array.isArray(state.processedUndoIds)
+        ? state.processedUndoIds
+        : []
     };
   } catch (error) {
     if (error.code !== "ENOENT" && !(error instanceof SyntaxError)) throw error;
-    return { version: 1, transfers: [] };
+    return { version: 1, transfers: [], processedUndoIds: [] };
   }
 }
 
@@ -41,6 +45,7 @@ async function saveState(state) {
 
 function publicState(state) {
   return {
+    userId: "local-test",
     transfers: state.transfers,
     allocatedCents: state.transfers.reduce(
       (sum, transfer) => sum + Number(transfer.amountCents || 0),
@@ -91,6 +96,7 @@ async function handleFinance(request, response) {
     if (!state.transfers.some((transfer) => transfer.id === body.id)) {
       state = {
         version: 1,
+        processedUndoIds: state.processedUndoIds,
         transfers: [
           ...state.transfers,
           {
@@ -103,8 +109,15 @@ async function handleFinance(request, response) {
       await saveState(state);
     }
   } else if (body.action === "undo") {
-    state = { version: 1, transfers: state.transfers.slice(0, -1) };
-    await saveState(state);
+    const id = String(body.id || "");
+    if (!state.processedUndoIds.includes(id)) {
+      state = {
+        version: 1,
+        transfers: state.transfers.slice(0, -1),
+        processedUndoIds: [...state.processedUndoIds, id].slice(-25)
+      };
+      await saveState(state);
+    }
   } else {
     sendJson(response, { error: "Unknown action" }, 400);
     return;

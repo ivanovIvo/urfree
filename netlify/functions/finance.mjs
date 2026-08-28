@@ -2,7 +2,7 @@ import { getStore } from "@netlify/blobs";
 import { getUser, refreshSession, verifyRequestOrigin } from "@netlify/identity";
 
 const STORE_NAME = "urfree-finance";
-const EMPTY_STATE = Object.freeze({ version: 1, transfers: [] });
+const EMPTY_STATE = Object.freeze({ version: 1, transfers: [], processedUndoIds: [] });
 
 const json = (value, status = 200) =>
   Response.json(value, {
@@ -10,9 +10,10 @@ const json = (value, status = 200) =>
     headers: { "Cache-Control": "no-store" }
   });
 
-function publicState(state) {
+function publicState(state, userId) {
   const transfers = Array.isArray(state?.transfers) ? state.transfers : [];
   return {
+    userId,
     transfers,
     allocatedCents: transfers.reduce((sum, item) => sum + item.amountCents, 0)
   };
@@ -48,7 +49,7 @@ export default async (request) => {
 
     if (request.method === "GET") {
       const state = (await store.get(key, { type: "json" })) || EMPTY_STATE;
-      return json(publicState(state));
+      return json(publicState(state, user.id));
     }
 
     if (request.method !== "POST") {
@@ -85,6 +86,9 @@ export default async (request) => {
 
         return {
           version: 1,
+          processedUndoIds: Array.isArray(current.processedUndoIds)
+            ? current.processedUndoIds
+            : [],
           transfers: [
             ...transfers,
             { id, amountCents, createdAt: new Date().toISOString() }
@@ -92,15 +96,28 @@ export default async (request) => {
         };
       });
 
-      return json(publicState(state));
+      return json(publicState(state, user.id));
     }
 
     if (body.action === "undo") {
-      const state = await updateState(store, key, (current) => ({
-        version: 1,
-        transfers: (Array.isArray(current.transfers) ? current.transfers : []).slice(0, -1)
-      }));
-      return json(publicState(state));
+      const id = String(body.id || "");
+      if (!/^[a-zA-Z0-9-]{16,80}$/.test(id)) {
+        return json({ error: "Invalid undo id" }, 400);
+      }
+
+      const state = await updateState(store, key, (current) => {
+        const processedUndoIds = Array.isArray(current.processedUndoIds)
+          ? current.processedUndoIds
+          : [];
+        if (processedUndoIds.includes(id)) return current;
+
+        return {
+          version: 1,
+          transfers: (Array.isArray(current.transfers) ? current.transfers : []).slice(0, -1),
+          processedUndoIds: [...processedUndoIds, id].slice(-25)
+        };
+      });
+      return json(publicState(state, user.id));
     }
 
     return json({ error: "Unknown action" }, 400);

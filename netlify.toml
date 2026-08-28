@@ -12,3 +12,8 @@
     X-Content-Type-Options = "nosniff"
     Referrer-Policy = "same-origin"
     Permissions-Policy = "camera=(), microphone=(), geolocation=()"
+
+[[headers]]
+  for = "/sw.js"
+  [headers.values]
+    Cache-Control = "no-cache"

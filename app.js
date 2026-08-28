@@ -745,9 +745,17 @@
   let moneyHoldTimer = null;
   let moneyHoldStart = null;
   let pendingAuthFlow = null;
+  let financeSyncPromise = null;
+  let authStatus = "unknown";
+  let lastSuccessfulSync = null;
+  let pendingTransferRequest = null;
+  let pendingUndoRequest = null;
+  let financeUserId = null;
 
   const identityClient = window.URFreeIdentity || null;
   const PENDING_AUTH_KEY = "urfree.pending-auth-flow";
+  const FINANCE_CACHE_KEY = "urfree.finance-cache.v1";
+  const API_TIMEOUT_MS = 12000;
   const AUTH_CALLBACK_KEYS = [
     "access_token",
     "confirmation_token",
@@ -797,7 +805,7 @@
     try {
       sessionStorage.removeItem(PENDING_AUTH_KEY);
     } catch {
-      // No persistent ledger data is stored in the browser.
+      // The in-memory flow is already cleared.
     }
   }
 
@@ -830,14 +838,132 @@
   async function hydrateBrowserSession() {
     if (!identityClient?.hydrateSession) return null;
     try {
-      return await identityClient.hydrateSession();
-    } catch {
+      const user = await identityClient.hydrateSession();
+      console.info("[URFree auth] session hydrate", { restored: Boolean(user) });
+      return user;
+    } catch (error) {
+      console.info("[URFree auth] session hydrate unavailable", {
+        online: navigator.onLine,
+        error: error instanceof Error ? error.name : "unknown"
+      });
       return null;
     }
   }
 
+  async function refreshBrowserSession() {
+    console.info("[URFree auth] refresh attempt");
+    if (!identityClient?.refreshSession) {
+      return hydrateBrowserSession();
+    }
+
+    try {
+      const refreshed = await identityClient.refreshSession();
+      if (refreshed) return true;
+      return Boolean(await hydrateBrowserSession());
+    } catch (error) {
+      console.info("[URFree auth] refresh unavailable", {
+        online: navigator.onLine,
+        error: error instanceof Error ? error.name : "unknown"
+      });
+      return false;
+    }
+  }
+
+  function normalizeFinanceState(state) {
+    const normalizedTransfers = Array.isArray(state?.transfers)
+      ? state.transfers
+          .filter(
+            (item) =>
+              item &&
+              typeof item.id === "string" &&
+              Number.isSafeInteger(item.amountCents) &&
+              item.amountCents > 0 &&
+              typeof item.createdAt === "string"
+          )
+          .map((item) => ({
+            id: item.id,
+            amountCents: item.amountCents,
+            createdAt: item.createdAt
+          }))
+      : [];
+
+    return {
+      userId: typeof state?.userId === "string" ? state.userId : null,
+      transfers: normalizedTransfers,
+      allocatedCents: normalizedTransfers.reduce(
+        (sum, item) => sum + item.amountCents,
+        0
+      )
+    };
+  }
+
+  function readFinanceCache() {
+    try {
+      const cached = JSON.parse(localStorage.getItem(FINANCE_CACHE_KEY) || "null");
+      if (cached?.version !== 1 || !cached.finance) return false;
+
+      lastSuccessfulSync =
+        typeof cached.lastSuccessfulSync === "string"
+          ? cached.lastSuccessfulSync
+          : null;
+      applyFinanceState(cached.finance, { source: "cache", persist: false });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  function writeFinanceCache(finance) {
+    try {
+      const nowMs = Date.now();
+      localStorage.setItem(
+        FINANCE_CACHE_KEY,
+        JSON.stringify({
+          version: 1,
+          userId: finance.userId,
+          finance,
+          projectBalanceCents: projectBalanceCents(nowMs),
+          lastSuccessfulSync
+        })
+      );
+    } catch {
+      // Cache failure must never affect the server-confirmed ledger state.
+    }
+  }
+
+  function clearFinanceCache() {
+    lastSuccessfulSync = null;
+    try {
+      localStorage.removeItem(FINANCE_CACHE_KEY);
+    } catch {
+      // The authenticated server ledger remains unaffected.
+    }
+  }
+
+  function clearDisplayedFinance() {
+    financeReady = false;
+    financeUserId = null;
+    allocatedCents = 0;
+    transfers = [];
+    renderHistory();
+    update();
+  }
+
+  function reconcileFinanceCacheUser(user) {
+    if (!user?.id || !financeUserId || financeUserId === user.id) return;
+    clearFinanceCache();
+    clearDisplayedFinance();
+  }
+
   async function bootstrapAuthentication() {
     const callbackInUrl = hasAuthCallbackHash();
+    console.info("[URFree auth] bootstrap", {
+      callback: callbackInUrl,
+      cachedFinance: financeReady,
+      standalone:
+        window.matchMedia?.("(display-mode: standalone)").matches === true ||
+        window.navigator.standalone === true
+    });
     if (callbackInUrl) showCallbackStatus("Completing authentication…");
 
     if (!identityClient?.handleAuthCallback) {
@@ -845,7 +971,7 @@
         showCallbackStatus("Authentication support did not load. Please reload the page.", true);
         return;
       }
-      await loadFinanceState();
+      await syncFinanceState("bootstrap");
       return;
     }
 
@@ -874,8 +1000,13 @@
         return;
       }
 
-      await hydrateBrowserSession();
-      await loadFinanceState();
+      const user = await hydrateBrowserSession();
+      if (user) {
+        authStatus = "authenticated";
+        reconcileFinanceCacheUser(user);
+      }
+      if (callback) showAuthView(null);
+      await syncFinanceState("bootstrap");
     } catch (error) {
       showCallbackStatus(
         error instanceof Error
@@ -948,6 +1079,12 @@
     return Number(digits || 0);
   }
 
+  function createOperationId(prefix) {
+    return typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  }
+
   function resetPicker() {
     digitWheelsEl.querySelectorAll("select").forEach((select) => {
       select.value = "0";
@@ -997,7 +1134,10 @@
         select.appendChild(option);
       }
 
-      select.addEventListener("change", updateConfirmState);
+      select.addEventListener("change", () => {
+        pendingTransferRequest = null;
+        updateConfirmState();
+      });
       digitWheelsEl.appendChild(select);
     }
 
@@ -1036,56 +1176,131 @@
     undoTransferEl.disabled = financeBusy || transfers.length === 0;
   }
 
-  function applyFinanceState(state) {
-    transfers = Array.isArray(state.transfers) ? state.transfers : [];
-    allocatedCents = Number.isSafeInteger(state.allocatedCents)
-      ? state.allocatedCents
-      : transfers.reduce((sum, item) => sum + Number(item.amountCents || 0), 0);
+  function applyFinanceState(state, { source = "server", persist = true } = {}) {
+    const finance = normalizeFinanceState(state);
+    financeUserId = finance.userId;
+    transfers = finance.transfers;
+    allocatedCents = finance.allocatedCents;
     financeReady = true;
-    authOverlayEl.hidden = true;
-    syncStatusEl.textContent = "";
+    syncStatusEl.textContent = source === "cache" ? "cached" : "";
     renderHistory();
     update();
+
+    if (source === "server" && persist) {
+      lastSuccessfulSync = new Date().toISOString();
+      writeFinanceCache(finance);
+    }
   }
 
   async function api(path, options = {}) {
-    const response = await fetch(path, {
-      ...options,
-      credentials: "same-origin",
-      headers: {
-        "Content-Type": "application/json",
-        ...(options.headers || {})
-      }
-    });
+    const controller = new AbortController();
+    const timeout = window.setTimeout(() => controller.abort(), API_TIMEOUT_MS);
+    let response;
+
+    try {
+      response = await fetch(path, {
+        ...options,
+        credentials: "same-origin",
+        signal: controller.signal,
+        headers: {
+          "Content-Type": "application/json",
+          ...(options.headers || {})
+        }
+      });
+    } catch (cause) {
+      const error = new Error(
+        navigator.onLine ? "Unable to reach the server" : "You are offline"
+      );
+      error.kind = "NETWORK_ERROR";
+      error.cause = cause;
+      throw error;
+    } finally {
+      clearTimeout(timeout);
+    }
+
     const data = await response.json().catch(() => ({}));
 
     if (!response.ok) {
       const error = new Error(data.error || "Request failed");
       error.status = response.status;
+      error.kind =
+        response.status === 401
+          ? "AUTH_REQUIRED"
+          : response.status >= 500
+            ? "SERVER_ERROR"
+            : "REQUEST_ERROR";
       throw error;
     }
 
     return data;
   }
 
-  async function loadFinanceState() {
-    syncStatusEl.textContent = "syncing";
+  // Authenticated requests get one silent session recovery and exactly one retry.
+  // Only a second explicit 401 is considered proof that the session is invalid.
+  async function authenticatedApi(path, options = {}) {
     try {
-      applyFinanceState(await api("/api/finance"));
+      return await api(path, options);
     } catch (error) {
-      financeReady = false;
-      setTransferPickerOpen(false);
-      renderMoney(Number.NaN);
-      renderMoneyElement(projectMoneyEl, Number.NaN);
-      syncStatusEl.textContent = "";
-      if (error.status === 401) {
-        loginErrorEl.textContent = "";
-        showAuthView("login");
-      } else {
-        loginErrorEl.textContent = "Netlify connection is not ready";
-        showAuthView("login");
-      }
+      if (error.status !== 401) throw error;
     }
+
+    console.info("[URFree auth] finance 401; refreshing and retrying once");
+    await refreshBrowserSession();
+
+    try {
+      return await api(path, options);
+    } catch (error) {
+      if (error.status === 401) error.kind = "AUTH_INVALID";
+      throw error;
+    }
+  }
+
+  function showConfirmedInvalidSession() {
+    authStatus = "invalid";
+    setTransferPickerOpen(false);
+    loginErrorEl.textContent = "";
+    showAuthView("login");
+  }
+
+  function showSyncFallback(error, context = "sync") {
+    const offline = !navigator.onLine || error.kind === "NETWORK_ERROR";
+    syncStatusEl.textContent = offline ? "offline" : "sync later";
+    console.info("[URFree finance] network fallback to cache", {
+      context,
+      online: navigator.onLine,
+      cachedFinance: financeReady,
+      error: error.kind || "unknown"
+    });
+  }
+
+  async function syncFinanceState(reason = "manual") {
+    if (financeSyncPromise) return financeSyncPromise;
+    if (financeBusy) return null;
+    if (pendingAuthFlow || readPendingAuth() || authStatus === "invalid") return null;
+
+    syncStatusEl.textContent = "syncing";
+    financeSyncPromise = (async () => {
+      try {
+        const state = await authenticatedApi("/api/finance");
+        authStatus = "authenticated";
+        applyFinanceState(state, { source: "server" });
+        if (!pendingAuthFlow && !readPendingAuth()) showAuthView(null);
+        console.info("[URFree finance] fetch success", { reason });
+        return state;
+      } catch (error) {
+        if (error.kind === "AUTH_INVALID") {
+          console.info("[URFree auth] confirmed invalid session");
+          showConfirmedInvalidSession();
+        } else {
+          showSyncFallback(error, reason);
+        }
+        return null;
+      } finally {
+        financeSyncPromise = null;
+      }
+    })();
+
+    return financeSyncPromise;
   }
 
   async function saveFinanceAction(body) {
@@ -1095,17 +1310,30 @@
     renderHistory();
 
     try {
-      const state = await api("/api/finance", {
+      if (financeSyncPromise) await financeSyncPromise;
+      if (authStatus === "invalid") return false;
+
+      const state = await authenticatedApi("/api/finance", {
         method: "POST",
         body: JSON.stringify(body)
       });
-      applyFinanceState(state);
+      authStatus = "authenticated";
+      applyFinanceState(state, { source: "server" });
       resetPicker();
       return true;
     } catch (error) {
-      syncStatusEl.textContent = "not saved";
-      maintenanceErrorEl.textContent = error.message;
-      if (error.status === 401) authOverlayEl.hidden = false;
+      if (error.kind === "AUTH_INVALID") {
+        showConfirmedInvalidSession();
+      } else {
+        syncStatusEl.textContent = navigator.onLine
+          ? "not saved · retry"
+          : "offline · retry";
+        maintenanceErrorEl.textContent = error.message;
+        console.info("[URFree finance] mutation not committed in UI", {
+          action: body.action,
+          error: error.kind || "unknown"
+        });
+      }
       return false;
     } finally {
       financeBusy = false;
@@ -1119,17 +1347,23 @@
     const availableCents = latestLifetimeCents - allocatedCents;
     if (amountCents <= 0 || amountCents > availableCents || financeBusy) return;
 
-    const id = typeof crypto.randomUUID === "function"
-      ? crypto.randomUUID()
-      : `transfer-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+    if (!pendingTransferRequest || pendingTransferRequest.amountCents !== amountCents) {
+      pendingTransferRequest = {
+        id: createOperationId("transfer"),
+        amountCents
+      };
+    }
 
     const saved = await saveFinanceAction({
       action: "transfer",
-      id,
+      id: pendingTransferRequest.id,
       amountCents,
       lifetimeCents: latestLifetimeCents
     });
-    if (saved) setTransferPickerOpen(false);
+    if (saved) {
+      pendingTransferRequest = null;
+      setTransferPickerOpen(false);
+    }
   });
 
   moneyEl.addEventListener("pointerdown", beginMoneyHold);
@@ -1189,16 +1423,17 @@
     submit.disabled = true;
 
     try {
+      let activatedUser = null;
       if (flow.type === "invite") {
         if (!identityClient?.acceptInvite || !flow.token) {
           throw new Error("Invitation support did not load");
         }
-        await identityClient.acceptInvite(flow.token, password);
+        activatedUser = await identityClient.acceptInvite(flow.token, password);
       } else if (flow.type === "recovery") {
         if (!identityClient?.updateUser) {
           throw new Error("Password recovery support did not load");
         }
-        await identityClient.updateUser({ password });
+        activatedUser = await identityClient.updateUser({ password });
       } else {
         throw new Error("Unknown authentication flow");
       }
@@ -1208,14 +1443,11 @@
       newPasswordEl.value = "";
       confirmPasswordEl.value = "";
 
-      await hydrateBrowserSession();
-      await loadFinanceState();
-
-      if (!financeReady) {
-        showAuthView("login");
-      } else {
-        showAuthView(null);
-      }
+      authStatus = "authenticated";
+      const user = (await hydrateBrowserSession()) || activatedUser;
+      reconcileFinanceCacheUser(user);
+      showAuthView(null);
+      await syncFinanceState(flow.type);
     } catch (error) {
       passwordSetupErrorEl.textContent =
         error instanceof Error ? error.message : "Unable to activate account";
@@ -1238,7 +1470,7 @@
     submit.disabled = true;
 
     try {
-      await api("/api/auth", {
+      const loginResult = await api("/api/auth", {
         method: "POST",
         body: JSON.stringify({
           action: "login",
@@ -1247,9 +1479,11 @@
         })
       });
       loginPasswordEl.value = "";
-      await hydrateBrowserSession();
-      await loadFinanceState();
-      if (financeReady) showAuthView(null);
+      authStatus = "authenticated";
+      const user = (await hydrateBrowserSession()) || loginResult.user;
+      reconcileFinanceCacheUser(user);
+      showAuthView(null);
+      await syncFinanceState("login");
     } catch (error) {
       loginErrorEl.textContent = error.message;
     } finally {
@@ -1259,7 +1493,8 @@
 
   projectMoneyEl.addEventListener("click", () => {
     if (!financeReady) {
-      authOverlayEl.hidden = false;
+      if (authStatus === "invalid") showAuthView("login");
+      else syncFinanceState("project-open");
       return;
     }
     maintenanceErrorEl.textContent = "";
@@ -1277,7 +1512,11 @@
 
   undoTransferEl.addEventListener("click", async () => {
     if (transfers.length === 0 || financeBusy) return;
-    if (await saveFinanceAction({ action: "undo" })) {
+    if (!pendingUndoRequest) {
+      pendingUndoRequest = { id: createOperationId("undo") };
+    }
+    if (await saveFinanceAction({ action: "undo", id: pendingUndoRequest.id })) {
+      pendingUndoRequest = null;
       maintenanceOverlayEl.hidden = true;
     }
   });
@@ -1290,13 +1529,14 @@
         body: JSON.stringify({ action: "logout" })
       });
     } finally {
-      financeReady = false;
-      allocatedCents = 0;
-      transfers = [];
+      authStatus = "invalid";
+      pendingTransferRequest = null;
+      pendingUndoRequest = null;
+      clearFinanceCache();
+      clearDisplayedFinance();
       maintenanceOverlayEl.hidden = true;
       setTransferPickerOpen(false);
       showAuthView("login");
-      update();
     }
   });
 
@@ -1341,12 +1581,34 @@
   }
 
   renderCircles();
+  readFinanceCache();
   update();
   bootstrapAuthentication();
 
   setInterval(update, 1000);
 
   document.addEventListener("visibilitychange", () => {
-    if (!document.hidden) update();
+    if (!document.hidden) {
+      update();
+      syncFinanceState("visibility");
+    }
   });
+
+  window.addEventListener("pageshow", (event) => {
+    if (event.persisted) syncFinanceState("pageshow");
+  });
+
+  window.addEventListener("online", () => {
+    syncFinanceState("online");
+  });
+
+  if ("serviceWorker" in navigator) {
+    window.addEventListener("load", () => {
+      navigator.serviceWorker.register("/sw.js").catch((error) => {
+        console.info("[URFree offline] service worker unavailable", {
+          error: error instanceof Error ? error.name : "unknown"
+        });
+      });
+    });
+  }
 })();
