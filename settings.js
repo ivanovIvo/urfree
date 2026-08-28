@@ -16,7 +16,7 @@ const SETTINGS = Object.freeze({
     initialBalance: -998.00,
 
     adjustments: [
-      { date: "2026-08-28", amount: -80.00 }
+      { date: "2026-08-27", amount: -80.00 }
     ]
   },
 
