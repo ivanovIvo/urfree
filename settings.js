@@ -12,14 +12,6 @@ const SETTINGS = Object.freeze({
 
   packsPerDay: 3,
 
-  project: {
-    initialBalance: -998.00,
-
-    adjustments: [
-      { date: "2026-08-27", amount: -80.00 }
-    ]
-  },
-
   prices: [
     {
       from: {
