@@ -674,7 +674,7 @@
   }
 
   function show(mode) {
-    circlesEl.hidden = mode !== "circles";
+    circlesEl.hidden = mode !== "circles" && mode !== "special";
     specialEl.hidden = mode !== "special";
     elapsedEl.hidden = mode !== "elapsed";
   }
@@ -698,6 +698,7 @@
     if (special) {
       specialEl.textContent = special;
       show("special");
+      updateCircleView(nowMs, startMs);
     } else if (nowMs < startMs + FIRST_PHASE_DAYS * DAY_MS) {
       show("circles");
       updateCircleView(nowMs, startMs);

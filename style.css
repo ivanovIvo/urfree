@@ -71,6 +71,7 @@ body {
   justify-self: stretch;
   min-height: 250px;
   display: flex;
+  flex-direction: column;
   align-items: center;
   justify-content: center;
   transform: translateY(16px);
@@ -109,12 +110,14 @@ body {
 }
 
 #special {
+  order: -1;
   text-align: center;
   font-weight: 700;
   letter-spacing: -0.045em;
   line-height: 1;
   white-space: nowrap;
-  font-size: clamp(54px, 17vw, 92px);
+  font-size: clamp(42px, 13vw, 68px);
+  margin-bottom: 18px;
 }
 
 #elapsed {
@@ -311,6 +314,11 @@ body {
 
   #circles {
     gap: 11px 5px;
+  }
+
+  #special {
+    font-size: clamp(38px, 11vw, 54px);
+    margin-bottom: 12px;
   }
 
   .indicator-stack {
